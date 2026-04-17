@@ -1,0 +1,41 @@
+# Build output
+/build/
+/build.old/
+*.o
+*.exe
+*.exp
+*.lib
+
+# DLLs / import libraries — except the CE Lua import library, which is
+# checked in so users don't need the MinGW toolchain just to regenerate it.
+*.dll
+*.a
+!plugin/lua53-64.a
+
+# Downloaded Lua source
+/vendor/lua-*/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*~
+
+# Visual Studio build (if building via plugin.vcxproj)
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+Debug/
+Release/
+x64/

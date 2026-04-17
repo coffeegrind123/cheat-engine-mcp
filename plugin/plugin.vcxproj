@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>ce_http_bridge</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <TargetName>ce_http_bridge</TargetName>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;CE_HTTP_BRIDGE_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)vendor;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <SDLCheck>true</SDLCheck>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalDependencies>ws2_32.lib;lua53-64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>$(ProjectDir)plugin.def</ModuleDefinitionFile>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="ce_api.cpp" />
+    <ClCompile Include="lua_bridge.cpp" />
+    <ClCompile Include="http_server.cpp" />
+    <ClCompile Include="handlers\process_handlers.cpp" />
+    <ClCompile Include="handlers\memory_handlers.cpp" />
+    <ClCompile Include="handlers\scan_handlers.cpp" />
+    <ClCompile Include="handlers\analysis_handlers.cpp" />
+    <ClCompile Include="handlers\debug_handlers.cpp" />
+    <ClCompile Include="handlers\symbol_handlers.cpp" />
+    <ClCompile Include="handlers\injection_handlers.cpp" />
+    <ClCompile Include="handlers\table_handlers.cpp" />
+    <ClCompile Include="handlers\structure_handlers.cpp" />
+    <ClCompile Include="handlers\window_handlers.cpp" />
+    <ClCompile Include="handlers\input_handlers.cpp" />
+    <ClCompile Include="handlers\file_handlers.cpp" />
+    <ClCompile Include="handlers\kernel_handlers.cpp" />
+    <ClCompile Include="handlers\threading_handlers.cpp" />
+    <ClCompile Include="handlers\misc_handlers.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ce_api.h" />
+    <ClInclude Include="lua_bridge.h" />
+    <ClInclude Include="http_server.h" />
+    <ClInclude Include="handlers\handlers.h" />
+    <ClInclude Include="handlers\handler_helpers.h" />
+    <ClInclude Include="CheatEngine\cepluginsdk.h" />
+    <ClInclude Include="CheatEngine\lua.h" />
+    <ClInclude Include="CheatEngine\lauxlib.h" />
+    <ClInclude Include="CheatEngine\lualib.h" />
+    <ClInclude Include="CheatEngine\luaconf.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
