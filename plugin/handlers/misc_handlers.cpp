@@ -100,4 +100,20 @@ void RegisterMiscHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }
     });
+
+    // speedhack: scale the target's perceived time. speed=1.0 normal, higher=faster.
+    svr.Post("/api/speedhack_set_speed", [lua](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            double speed = body.value("speed", 1.0);
+            std::string luaCode = R"LUA(
+                local ok, err = pcall(speedhack_setSpeed, )LUA" + std::to_string(speed) + R"LUA()
+                if not ok then return '{"success":false,"error":"speedhack_setSpeed failed: ' .. tostring(err):gsub('"','\\"') .. '","error_code":"INTERNAL_ERROR"}' end
+                return '{"success":true,"speed":)LUA" + std::to_string(speed) + R"LUA(}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
+        } catch (const std::exception& e) {
+            res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
+        }
+    });
 }

@@ -264,37 +264,48 @@ void RegisterTableHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
         }
     });
 
-    svr.Post("/api/freeze_mem", [api](const httplib::Request& req, httplib::Response& res) {
+    // Freezing mutates CE's freeze/timer state — must run on the main thread.
+    // Implemented via CE's address-list memory records (createMemoryRecord +
+    // Active=true freezes the value). Returns the record ID as freeze_id.
+    svr.Post("/api/freeze_mem", [lua](const httplib::Request& req, httplib::Response& res) {
         try {
             auto body = json::parse(req.body);
             std::string addrStr = body.value("address", "0");
             int size = body.value("size", 4);
+            // map byte-size -> CE valueType: vtByte=0 vtWord=1 vtDword=2 vtQword=3
+            int vt = (size == 1) ? 0 : (size == 2) ? 1 : (size == 8) ? 3 : 2;
 
-            uint64_t address = HttpServer::ParseAddress(addrStr);
-            int freezeId = api->FreezeMem(address, size);
-            if (freezeId >= 0) {
-                json r;
-                r["success"] = true;
-                r["freeze_id"] = freezeId;
-                res.set_content(r.dump(), "application/json");
-            } else {
-                res.set_content(HttpServer::ErrorJson("FreezeMem failed", "INTERNAL_ERROR"), "application/json");
-            }
+            std::string luaCode = R"LUA(
+                local addr = getAddress(")LUA" + hh::luaEscape(addrStr) + R"LUA(")
+                if not addr then return '{"success":false,"error":"Invalid address","error_code":"INVALID_ADDRESS"}' end
+                local al = getAddressList()
+                local mr = al.createMemoryRecord()
+                if not mr then return '{"success":false,"error":"createMemoryRecord failed","error_code":"INTERNAL_ERROR"}' end
+                mr.Address = string.format("0x%X", addr)
+                mr.Type = )LUA" + std::to_string(vt) + R"LUA(
+                mr.Active = true
+                return '{"success":true,"freeze_id":' .. tostring(mr.ID) .. '}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
         } catch (const std::exception& e) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }
     });
 
-    svr.Post("/api/unfreeze_mem", [api](const httplib::Request& req, httplib::Response& res) {
+    svr.Post("/api/unfreeze_mem", [lua](const httplib::Request& req, httplib::Response& res) {
         try {
             auto body = json::parse(req.body);
             int freezeId = body.value("freeze_id", -1);
 
-            if (api->UnfreezeMem(freezeId)) {
-                res.set_content(R"({"success":true})", "application/json");
-            } else {
-                res.set_content(HttpServer::ErrorJson("UnfreezeMem failed", "INTERNAL_ERROR"), "application/json");
-            }
+            std::string luaCode = R"LUA(
+                local id = )LUA" + std::to_string(freezeId) + R"LUA(
+                local al = getAddressList()
+                local mr = al.getMemoryRecordByID(id)
+                if not mr then return '{"success":false,"error":"Freeze record not found","error_code":"NOT_FOUND"}' end
+                mr.destroy()
+                return '{"success":true}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
         } catch (const std::exception& e) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }

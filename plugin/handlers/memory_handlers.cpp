@@ -11,55 +11,64 @@ using json = nlohmann::json;
 
 void RegisterMemoryHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
 
-    svr.Post("/api/read_memory", [api](const httplib::Request& req, httplib::Response& res) {
+    // NOTE: read_memory/write_memory MUST run on CE's main thread.
+    // CE's exported ReadProcessMemory/WriteProcessMemory (and OpenedProcessHandle)
+    // touch CE-internal state (handle, DBVM/driver read path, symbol handler) with
+    // no locking. Calling them from the httplib worker thread access-violates and
+    // kills CheatEngine (reliably under Wine). Marshal through Lua readBytes/writeBytes
+    // via ExecuteOnMainThread, exactly like read_integer/read_string/read_pointer.
+    svr.Post("/api/read_memory", [lua](const httplib::Request& req, httplib::Response& res) {
         try {
             auto body = json::parse(req.body);
             std::string addrStr = body.value("address", "0");
             int size = body.value("size", 256);
-            size = std::min(size, 1048576);
+            size = std::min(std::max(size, 0), 1048576);
 
-            uint64_t address = HttpServer::ParseAddress(addrStr);
-            std::vector<uint8_t> buffer(size, 0);
-            size_t bytesRead = 0;
-
-            if (api->ReadProcessMemory(address, buffer.data(), size, &bytesRead)) {
-                json r;
-                r["success"] = true;
-                r["address"] = HttpServer::FormatHex(address);
-                r["size"] = (int)bytesRead;
-                r["bytes"] = HttpServer::BytesToHexString(buffer.data(), bytesRead);
-                res.set_content(r.dump(), "application/json");
-            } else {
-                res.set_content(HttpServer::ErrorJson("ReadProcessMemory failed at " + HttpServer::FormatHex(address), "INVALID_ADDRESS"), "application/json");
-            }
+            std::string luaCode = R"LUA(
+                local addr = getAddress(")LUA" + hh::luaEscape(addrStr) + R"LUA(")
+                if not addr then return '{"success":false,"error":"Invalid address","error_code":"INVALID_ADDRESS"}' end
+                local t = readBytes(addr, )LUA" + std::to_string(size) + R"LUA(, true)
+                if t == nil then
+                    return '{"success":false,"error":"ReadProcessMemory failed","error_code":"INVALID_ADDRESS"}'
+                end
+                local hex = {}
+                for i = 1, #t do hex[i] = string.format("%02X", t[i]) end
+                return '{"success":true,"address":"' .. string.format("0x%X", addr) ..
+                       '","size":' .. #t .. ',"bytes":"' .. table.concat(hex, " ") .. '"}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
         } catch (const std::exception& e) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }
     });
 
-    svr.Post("/api/write_memory", [api](const httplib::Request& req, httplib::Response& res) {
+    svr.Post("/api/write_memory", [lua](const httplib::Request& req, httplib::Response& res) {
         try {
             auto body = json::parse(req.body);
             std::string addrStr = body.value("address", "0");
             std::string bytesHex = body.value("bytes", "");
 
-            uint64_t address = HttpServer::ParseAddress(addrStr);
             auto bytes = HttpServer::HexStringToBytes(bytesHex);
-
             if (bytes.empty()) {
                 res.set_content(HttpServer::ErrorJson("No bytes to write", "INVALID_PARAMS"), "application/json");
                 return;
             }
 
-            if (api->WriteProcessMemory(address, bytes.data(), bytes.size())) {
-                json r;
-                r["success"] = true;
-                r["address"] = HttpServer::FormatHex(address);
-                r["written"] = (int)bytes.size();
-                res.set_content(r.dump(), "application/json");
-            } else {
-                res.set_content(HttpServer::ErrorJson("WriteProcessMemory failed", "INVALID_ADDRESS"), "application/json");
+            std::string byteTable;
+            byteTable.reserve(bytes.size() * 4);
+            for (size_t i = 0; i < bytes.size(); i++) {
+                if (i > 0) byteTable += ",";
+                byteTable += std::to_string((int)bytes[i]);
             }
+
+            std::string luaCode = R"LUA(
+                local addr = getAddress(")LUA" + hh::luaEscape(addrStr) + R"LUA(")
+                if not addr then return '{"success":false,"error":"Invalid address","error_code":"INVALID_ADDRESS"}' end
+                local ok, err = pcall(function() writeBytes(addr, {)LUA" + byteTable + R"LUA(}) end)
+                if not ok then return '{"success":false,"error":"Write failed: ' .. tostring(err):gsub('"','\\"') .. '","error_code":"PERMISSION_DENIED"}' end
+                return '{"success":true,"address":"' .. string.format("0x%X", addr) .. '","written":)LUA" + std::to_string(bytes.size()) + R"LUA(}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
         } catch (const std::exception& e) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }

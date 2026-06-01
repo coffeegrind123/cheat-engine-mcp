@@ -168,19 +168,22 @@ void RegisterProcessHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
         }
     });
 
-    svr.Post("/api/get_opened_process_id", [api](const httplib::Request&, httplib::Response& res) {
-        PULONG p = api->GetOpenedProcessID();
-        uint32_t pid = p ? *p : 0;
-        if (pid == 0) { res.set_content(HttpServer::ErrorJson("No process attached", "NO_PROCESS"), "application/json"); return; }
-        json r; r["success"] = true; r["process_id"] = pid;
-        res.set_content(r.dump(), "application/json");
+    // Reads CE's opened-process globals — go through CE's main thread via Lua.
+    svr.Post("/api/get_opened_process_id", [lua](const httplib::Request&, httplib::Response& res) {
+        std::string luaCode = R"LUA(
+            local pid = getOpenedProcessID()
+            if not pid or pid == 0 then return '{"success":false,"error":"No process attached","error_code":"NO_PROCESS"}' end
+            return '{"success":true,"process_id":' .. tostring(pid) .. '}'
+        )LUA";
+        res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
     });
 
-    svr.Post("/api/get_opened_process_handle", [api](const httplib::Request&, httplib::Response& res) {
-        PHANDLE h = api->GetOpenedProcessHandle();
-        json r; r["success"] = true;
-        r["handle"] = HttpServer::FormatHex(h ? (uint64_t)(uintptr_t)*h : 0);
-        res.set_content(r.dump(), "application/json");
+    svr.Post("/api/get_opened_process_handle", [lua](const httplib::Request&, httplib::Response& res) {
+        std::string luaCode = R"LUA(
+            local h = getOpenedProcessHandle()
+            return '{"success":true,"handle":"' .. string.format("0x%X", h or 0) .. '"}'
+        )LUA";
+        res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
     });
 
     svr.Post("/api/enum_modules", [lua](const httplib::Request& req, httplib::Response& res) {

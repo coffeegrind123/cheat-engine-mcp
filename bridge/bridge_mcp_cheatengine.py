@@ -137,7 +137,15 @@ def safe_post_json(endpoint: str, data: dict = None, retries: int = 3) -> str:
                 continue
             return json.dumps({"success": False, "error": f"Timeout after {timeout}s", "error_code": "INTERNAL_ERROR"})
         except requests.exceptions.ConnectionError as e:
-            return json.dumps({"success": False, "error": f"Cannot reach CE HTTP Bridge at {ce_server_url}: {e}", "error_code": "INTERNAL_ERROR"})
+            # CE may be briefly unreachable (request blip, plugin HTTP thread busy,
+            # or CE just (re)starting). Retry with backoff before giving up so a
+            # transient drop doesn't surface as a hard failure to the caller.
+            if attempt < retries - 1:
+                wait_time = min(2 ** attempt, 5)
+                logger.warning(f"Connection error on {endpoint} (attempt {attempt + 1}/{retries}), retrying in {wait_time}s: {e}")
+                time.sleep(wait_time)
+                continue
+            return json.dumps({"success": False, "error": f"Cannot reach CE HTTP Bridge at {ce_server_url} after {retries} attempts: {e}", "error_code": "CE_UNREACHABLE"})
         except requests.exceptions.RequestException as e:
             return json.dumps({"success": False, "error": str(e), "error_code": "INTERNAL_ERROR"})
 
@@ -1309,6 +1317,12 @@ def play_sound(filename: str) -> str:
 def beep() -> str:
     """Play a system beep."""
     return safe_post_json("/api/beep")
+
+
+@mcp.tool()
+def speedhack_set_speed(speed: float = 1.0) -> str:
+    """Scale the attached target's perceived time (CE speedhack). 1.0 = normal speed, 2.0 = double, 0.5 = half."""
+    return safe_post_json("/api/speedhack_set_speed", {"speed": speed})
 
 
 @mcp.tool()

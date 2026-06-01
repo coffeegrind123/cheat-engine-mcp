@@ -431,14 +431,23 @@ void RegisterDebugHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
         }
     });
 
-    svr.Post("/api/pause_process", [api](const httplib::Request&, httplib::Response& res) {
-        api->Pause();
-        res.set_content(R"({"success":true})", "application/json");
+    // pause/unpause touch CE's debugger state — must run on CE's main thread.
+    svr.Post("/api/pause_process", [lua](const httplib::Request&, httplib::Response& res) {
+        std::string luaCode = R"LUA(
+            local ok, err = pcall(pause)
+            if not ok then return '{"success":false,"error":"pause failed: ' .. tostring(err):gsub('"','\\"') .. '","error_code":"INTERNAL_ERROR"}' end
+            return '{"success":true}'
+        )LUA";
+        res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
     });
 
-    svr.Post("/api/unpause_process", [api](const httplib::Request&, httplib::Response& res) {
-        api->Unpause();
-        res.set_content(R"({"success":true})", "application/json");
+    svr.Post("/api/unpause_process", [lua](const httplib::Request&, httplib::Response& res) {
+        std::string luaCode = R"LUA(
+            local ok, err = pcall(unpause)
+            if not ok then return '{"success":false,"error":"unpause failed: ' .. tostring(err):gsub('"','\\"') .. '","error_code":"INTERNAL_ERROR"}' end
+            return '{"success":true}'
+        )LUA";
+        res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
     });
 
     // DBVM watch lifecycle

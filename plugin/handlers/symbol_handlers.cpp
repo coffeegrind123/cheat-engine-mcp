@@ -10,21 +10,21 @@ using json = nlohmann::json;
 
 void RegisterSymbolHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
 
-    svr.Post("/api/get_symbol_address", [api](const httplib::Request& req, httplib::Response& res) {
+    // CE's symbol handler (NameToAddress) is not thread-safe — resolve on the main thread.
+    svr.Post("/api/get_symbol_address", [lua](const httplib::Request& req, httplib::Response& res) {
         try {
             auto body = json::parse(req.body);
             std::string symbol = body.value("symbol", "");
-            uint64_t address = 0;
 
-            if (api->NameToAddress(symbol.c_str(), &address) && address != 0) {
-                json r;
-                r["success"] = true;
-                r["symbol"] = symbol;
-                r["address"] = HttpServer::FormatHex(address);
-                res.set_content(r.dump(), "application/json");
-            } else {
-                res.set_content(HttpServer::ErrorJson("Symbol not found: " + symbol, "NOT_FOUND"), "application/json");
-            }
+            std::string luaCode = R"LUA(
+                local sym = ")LUA" + hh::luaEscape(symbol) + R"LUA("
+                local addr = getAddressSafe(sym)
+                if addr == nil or addr == 0 then
+                    return '{"success":false,"error":"Symbol not found: ' .. sym:gsub('"','\\"') .. '","error_code":"NOT_FOUND"}'
+                end
+                return '{"success":true,"symbol":"' .. sym:gsub('"','\\"') .. '","address":"' .. string.format("0x%X", addr) .. '"}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
         } catch (const std::exception& e) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }
