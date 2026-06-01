@@ -15,10 +15,14 @@ Claude Code (container)
 
 ## Feature Surface
 
-- 175 HTTP endpoints / 176 MCP tools covering the full CE Lua API
+- 179 HTTP endpoints / 181 MCP tools covering the full CE Lua API
 - Process attach, memory read/write (typed), AOB/value/module scanning with persistent sessions
+- Batch reads: `read_many` (many typed addresses in one round-trip) and `read_struct`
+  (named typed fields at offsets from a base) — big speedups for polling loops
 - Disassembly, assembly, function analysis, xref discovery, RTTI identification
 - Software + hardware breakpoints, per-thread breakpoints, CPU context get/set, XMM/LBR
+- `get_call_stack` (frame-pointer walk + symbolization), `run_to_address` (one-shot
+  breakpoint, run, wait-for-hit), `speedhack_set_speed`
 - DBVM (ring -1) invisible watchpoints with poll/stop lifecycle
 - Code injection: auto-assembler, DLL injection (.NET too), TCC/C# JIT, executeCode variants
 - Cheat table load/save, memory record CRUD
@@ -129,7 +133,7 @@ plugin/                      # C++ DLL source (Windows target)
 └── plugin.vcxproj           # Visual Studio project (alternative build)
 
 bridge/                      # Python MCP bridge
-├── bridge_mcp_cheatengine.py   # FastMCP server, 176 @mcp.tool() functions
+├── bridge_mcp_cheatengine.py   # FastMCP server, 181 @mcp.tool() functions
 ├── run-mcp.sh                  # Startup wrapper
 └── requirements.txt
 

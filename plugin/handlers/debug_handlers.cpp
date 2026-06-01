@@ -601,4 +601,46 @@ void RegisterDebugHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }
     });
+
+    // Call-stack via frame-pointer walk. Pass the frame pointer (RBP/EBP) and
+    // optionally the instruction pointer (RIP/EIP) from debug_get_context:
+    //   {"frame":"0x..","instruction_pointer":"0x..","max_frames":32}
+    // Returns symbolized return addresses (uses target bitness for pointer size).
+    svr.Post("/api/get_call_stack", [lua](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            std::string frameStr = body.value("frame", "0");
+            std::string ripStr = body.value("instruction_pointer", "");
+            int maxFrames = body.value("max_frames", 32);
+            if (maxFrames < 1) maxFrames = 1;
+            if (maxFrames > 256) maxFrames = 256;
+
+            std::string luaCode = R"LUA(
+                local fp = getAddress(")LUA" + hh::luaEscape(frameStr) + R"LUA(")
+                if not fp or fp == 0 then return '{"success":false,"error":"Invalid frame pointer","error_code":"INVALID_PARAMS"}' end
+                local psize = targetIs64Bit() and 8 or 4
+                local frames = {}
+                local function sym(a) local s = getNameFromAddress(a, true, true); if s == nil then return "" end; return tostring(s):gsub('\\','\\\\'):gsub('"','\\"') end
+                )LUA" + (ripStr.empty() ? std::string("") :
+                  ("local rip = getAddress(\"" + hh::luaEscape(ripStr) + "\")\n"
+                   "if rip and rip ~= 0 then frames[#frames+1] = '{\"frame\":0,\"address\":\"' .. string.format(\"0x%X\", rip) .. '\",\"symbol\":\"' .. sym(rip) .. '\"}' end\n"))
+                + R"LUA(
+                local cur = fp
+                local guard = 0
+                while #frames < )LUA" + std::to_string(maxFrames) + R"LUA( and cur and cur ~= 0 and guard < 1024 do
+                    guard = guard + 1
+                    local ret = readPointer(cur + psize)
+                    local nextfp = readPointer(cur)
+                    if not ret or ret == 0 then break end
+                    frames[#frames+1] = '{"frame":' .. #frames .. ',"address":"' .. string.format("0x%X", ret) .. '","symbol":"' .. sym(ret) .. '","fp":"' .. string.format("0x%X", cur) .. '"}'
+                    if not nextfp or nextfp <= cur then break end
+                    cur = nextfp
+                end
+                return '{"success":true,"frame_count":' .. #frames .. ',"frames":[' .. table.concat(frames, ',') .. ']}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
+        } catch (const std::exception& e) {
+            res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
+        }
+    });
 }

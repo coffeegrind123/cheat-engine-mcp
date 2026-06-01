@@ -580,4 +580,127 @@ void RegisterMemoryHandlers(httplib::Server& svr, CEApi* api, LuaBridge* lua) {
             res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
         }
     });
+
+    // Batch typed reads in ONE main-thread round-trip. Input:
+    //   {"reads":[{"address":"hw.dll+1059AE0","type":"dword"},
+    //             {"address":"0x1234","type":"string","length":64}, ...]}
+    // type: byte|word|dword|qword|float|double|pointer|string  (default dword)
+    // Each result: {address, resolved, ok, value|error}. Dramatically cuts
+    // per-poll latency vs N separate read_integer/read_pointer calls.
+    svr.Post("/api/read_many", [lua](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            auto reads = body.value("reads", json::array());
+            std::string tbl = "{";
+            for (size_t i = 0; i < reads.size(); ++i) {
+                const auto& it = reads[i];
+                std::string a = it.value("address", "0");
+                std::string t = it.value("type", "dword");
+                int n = it.value("length", 256);
+                if (i) tbl += ",";
+                tbl += "{a=\"" + hh::luaEscape(a) + "\",t=\"" + hh::luaEscape(t) + "\",n=" + std::to_string(n) + "}";
+            }
+            tbl += "}";
+
+            std::string luaCode = R"LUA(
+                local reads = )LUA" + tbl + R"LUA(
+                local function fmt(v, t)
+                    if v == nil then return 'null' end
+                    if t == "pointer" then return '"' .. string.format("0x%X", v) .. '"' end
+                    if t == "string" then
+                        local s = tostring(v):gsub('\\','\\\\'):gsub('"','\\"'):gsub('\n','\\n'):gsub('\r','\\r'):gsub('\t','\\t')
+                        return '"' .. s .. '"'
+                    end
+                    if t == "float" or t == "double" then return string.format("%.9g", v) end
+                    return string.format("%d", v)
+                end
+                local out = {}
+                for i = 1, #reads do
+                    local r = reads[i]
+                    local addr = getAddress(r.a)
+                    if not addr or addr == 0 then
+                        out[i] = '{"address":"' .. r.a:gsub('"','\\"') .. '","ok":false,"error":"invalid_address"}'
+                    else
+                        local t, v = r.t, nil
+                        if t == "byte" then v = readBytes(addr, 1, false)
+                        elseif t == "word" then v = readSmallInteger(addr)
+                        elseif t == "qword" then v = readQword(addr)
+                        elseif t == "float" then v = readFloat(addr)
+                        elseif t == "double" then v = readDouble(addr)
+                        elseif t == "pointer" then v = readPointer(addr)
+                        elseif t == "string" then v = readString(addr, r.n or 256, false)
+                        else v = readInteger(addr) end
+                        if v == nil then
+                            out[i] = '{"address":"' .. r.a:gsub('"','\\"') .. '","resolved":"' .. string.format("0x%X", addr) .. '","ok":false,"error":"read_failed"}'
+                        else
+                            out[i] = '{"address":"' .. r.a:gsub('"','\\"') .. '","resolved":"' .. string.format("0x%X", addr) .. '","ok":true,"type":"' .. t .. '","value":' .. fmt(v, t) .. '}'
+                        end
+                    end
+                end
+                return '{"success":true,"count":' .. #out .. ',"results":[' .. table.concat(out, ',') .. ']}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
+        } catch (const std::exception& e) {
+            res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
+        }
+    });
+
+    // Typed struct read: read named fields at byte offsets from a base, one call.
+    //   {"base":"hw.dll+1008240","fields":[{"name":"data","offset":8,"type":"pointer"},
+    //     {"name":"maxsize","offset":12,"type":"dword"},{"name":"cursize","offset":16,"type":"dword"}]}
+    // Returns {"success":true,"base":"0x..","fields":{name:value,...}}.
+    svr.Post("/api/read_struct", [lua](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            std::string base = body.value("base", "0");
+            auto fields = body.value("fields", json::array());
+            std::string tbl = "{";
+            for (size_t i = 0; i < fields.size(); ++i) {
+                const auto& f = fields[i];
+                std::string name = f.value("name", "f" + std::to_string(i));
+                std::string t = f.value("type", "dword");
+                long off = f.value("offset", 0);
+                int n = f.value("length", 256);
+                if (i) tbl += ",";
+                tbl += "{n=\"" + hh::luaEscape(name) + "\",o=" + std::to_string(off) +
+                       ",t=\"" + hh::luaEscape(t) + "\",len=" + std::to_string(n) + "}";
+            }
+            tbl += "}";
+
+            std::string luaCode = R"LUA(
+                local base = getAddress(")LUA" + hh::luaEscape(base) + R"LUA(")
+                if not base or base == 0 then return '{"success":false,"error":"Invalid base","error_code":"INVALID_ADDRESS"}' end
+                local fields = )LUA" + tbl + R"LUA(
+                local function fmt(v, t)
+                    if v == nil then return 'null' end
+                    if t == "pointer" then return '"' .. string.format("0x%X", v) .. '"' end
+                    if t == "string" then
+                        local s = tostring(v):gsub('\\','\\\\'):gsub('"','\\"'):gsub('\n','\\n'):gsub('\r','\\r'):gsub('\t','\\t')
+                        return '"' .. s .. '"'
+                    end
+                    if t == "float" or t == "double" then return string.format("%.9g", v) end
+                    return string.format("%d", v)
+                end
+                local parts = {}
+                for i = 1, #fields do
+                    local f = fields[i]
+                    local addr = base + f.o
+                    local t, v = f.t, nil
+                    if t == "byte" then v = readBytes(addr, 1, false)
+                    elseif t == "word" then v = readSmallInteger(addr)
+                    elseif t == "qword" then v = readQword(addr)
+                    elseif t == "float" then v = readFloat(addr)
+                    elseif t == "double" then v = readDouble(addr)
+                    elseif t == "pointer" then v = readPointer(addr)
+                    elseif t == "string" then v = readString(addr, f.len or 256, false)
+                    else v = readInteger(addr) end
+                    parts[#parts+1] = '"' .. f.n:gsub('"','\\"') .. '":' .. fmt(v, t)
+                end
+                return '{"success":true,"base":"' .. string.format("0x%X", base) .. '","fields":{' .. table.concat(parts, ',') .. '}}'
+            )LUA";
+            res.set_content(lua->ExecuteOnMainThread(luaCode), "application/json");
+        } catch (const std::exception& e) {
+            res.set_content(HttpServer::ErrorJson(e.what(), "INVALID_PARAMS"), "application/json");
+        }
+    });
 }

@@ -279,6 +279,68 @@ def read_pointer_chain(base: str, offsets: list[int]) -> str:
     return safe_post_json("/api/read_pointer_chain", {"base": base, "offsets": offsets})
 
 
+@mcp.tool()
+def read_many(reads: list[dict]) -> str:
+    """Batch-read many typed values in ONE round-trip (much faster than N read_* calls for polling).
+    reads: list of {"address": str, "type": str, "length"?: int}. address may be module-relative
+    (e.g. "hw.dll+1059AE0"). type: byte|word|dword|qword|float|double|pointer|string (default dword);
+    length applies to string reads. Returns per-item {address, resolved, ok, value|error}."""
+    return safe_post_json("/api/read_many", {"reads": reads})
+
+
+@mcp.tool()
+def read_struct(base: str, fields: list[dict]) -> str:
+    """Read named typed fields at byte offsets from a base address, in ONE round-trip.
+    base may be module-relative (e.g. "hw.dll+1008240"). fields: list of
+    {"name": str, "offset": int, "type": str, "length"?: int} with type
+    byte|word|dword|qword|float|double|pointer|string (default dword).
+    Returns {"success":true,"base":"0x..","fields":{name:value,...}}."""
+    return safe_post_json("/api/read_struct", {"base": base, "fields": fields})
+
+
+@mcp.tool()
+def get_call_stack(frame: str, instruction_pointer: str = "", max_frames: int = 32) -> str:
+    """Walk the call stack from a frame pointer (RBP/EBP) and symbolize return addresses.
+    Pass frame (and optionally instruction_pointer) from debug_get_context's registers.
+    Returns symbolized frames; pointer size follows the target's bitness."""
+    body = {"frame": frame, "max_frames": max_frames}
+    if instruction_pointer:
+        body["instruction_pointer"] = instruction_pointer
+    return safe_post_json("/api/get_call_stack", body)
+
+
+@mcp.tool()
+def run_to_address(address: str, timeout_s: float = 10.0, poll_interval_s: float = 0.2) -> str:
+    """Set a one-shot execute breakpoint at address, let the target run, and return when it is hit
+    (or on timeout). Orchestrates set_breakpoint -> poll get_breakpoint_hits -> remove_breakpoint
+    across separate main-thread calls (a single blocking call would deadlock CE's breakpoint
+    callback). Returns {"success":true,"hit":{...}} or a TIMEOUT error. The breakpoint is removed
+    on exit either way."""
+    setr_text = safe_post_json("/api/set_breakpoint", {"address": address, "trigger": "execute", "size": 1})
+    try:
+        setr = json.loads(setr_text)
+    except Exception:
+        return setr_text
+    if not setr.get("success"):
+        return setr_text
+    handle = setr.get("bp_handle")
+    deadline = time.time() + float(timeout_s)
+    try:
+        while time.time() < deadline:
+            hr_text = safe_post_json("/api/get_breakpoint_hits", {"handle": handle, "clear": False})
+            try:
+                hr = json.loads(hr_text)
+            except Exception:
+                hr = {}
+            if hr.get("success") and hr.get("hit_count", 0) > 0:
+                return json.dumps({"success": True, "address": address, "hit": hr["hits"][0]})
+            time.sleep(float(poll_interval_s))
+        return json.dumps({"success": False, "error_code": "TIMEOUT",
+                           "error": f"address {address} not hit within {timeout_s}s"})
+    finally:
+        safe_post_json("/api/remove_breakpoint", {"address": address})
+
+
 # --- MEMORY WRITING ---
 
 @mcp.tool()
